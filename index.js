@@ -28,7 +28,7 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
                 var transformedContent = {};
                 transformedContent.id = document._id;
                 transformedContent.type = contentType.uri;
-                transformedContent.meta = { href: request.protocol + "://" + request.headers.host + "/" + contentType.uri + "/" + document._id };
+                transformedContent.meta = { href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + document._id };
 
                 console.log(contentType.fields);
                 for (var i in contentType.fields) {
