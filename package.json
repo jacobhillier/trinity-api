@@ -1,7 +1,7 @@
 {
-  "name": "node-js-getting-started",
-  "version": "0.1.2",
-  "description": "A sample Node.js app using Express 4",
+  "name": "trinity-api",
+  "version": "0.0.0",
+  "description": "API for Trinity CMS",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -14,12 +14,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/heroku/node-js-getting-started"
-  },
-  "keywords": [
-    "node",
-    "heroku",
-    "express"
-  ],
-  "license": "MIT"
+    "url": "https://github.com/jacobhillier/trinity-api"
+  }
 }
