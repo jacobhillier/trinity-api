@@ -26,6 +26,9 @@ app.get('/:contentTypeUri/:contentId', function (request, response) {
             assert.equal(err, null);
             if (document.type == contentType._id) {
                 var transformedContent = {};
+                transformedContent.id = document._id;
+                transformedContent.type = contentType.uri;
+                transformedContent.meta = { href: request.protocol + "://" + request.headers.host + "/" + contentType.uri + "/" + document._id };
 
                 console.log(contentType.fields);
                 for (var i in contentType.fields) {
