@@ -9,7 +9,7 @@ var ObjectId = mongo.ObjectId;
 var app = express();
 app.set('port', (process.env.PORT || 5000));
 
-app.get('/:contentTypeUri/:contentId', function (request, response) {
+app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
     var findContentType = function (db, callback) {
         var collection = db.collection('contentType');
 
