@@ -30,10 +30,11 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
                 transformedContent.type = contentType.uri;
                 transformedContent.meta = { href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + document._id };
 
-                console.log(contentType.fields);
                 for (var i in contentType.fields) {
                     var fieldName = contentType.fields[i].name;
-                    transformedContent[fieldName] = document.fields[fieldName];
+                    if (contentType.fields[i].apiFull) {
+                        transformedContent[fieldName] = document.fields[fieldName];
+                    }
                 }
 
                 response.send(transformedContent);
