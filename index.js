@@ -1,6 +1,7 @@
 var express = require('express');
 var mongo = require('mongodb');
 var assert = require('assert');
+var array = require('array');
 
 var mongoUrl = 'mongodb://trinity-cms:tr1n1ty@dbh44.mongolab.com:27447/trinity';
 var MongoClient = mongo.MongoClient;
@@ -10,49 +11,134 @@ var app = express();
 app.set('port', (process.env.PORT || 5000));
 
 app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
-    var findContentType = function (db, callback) {
-        var collection = db.collection('contentType');
+    var findContent = function (id, transformType, db, callback) {
+        console.log('Finding content [%s]', id);
+        var collection = db.collection('content');
 
-        collection.findOne({uri: request.params.contentTypeUri}, function (err, document) {
+        collection.findOne({_id: ObjectId(id)}, function (err, content) {
             assert.equal(err, null);
-            callback(document);
+
+            callback(content, transformType);
         });
     };
 
-    var findContent = function (contentType, db, callback) {
-        var collection = db.collection('content');
-
-        collection.findOne({_id: ObjectId(request.params.contentId)}, function (err, document) {
-            assert.equal(err, null);
-            if (document.type == contentType._id) {
-                var transformedContent = {};
-                transformedContent.id = document._id;
-                transformedContent.type = contentType.uri;
-                transformedContent.meta = { href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + document._id };
-
-                for (var i in contentType.fields) {
-                    var fieldName = contentType.fields[i].name;
-                    if (contentType.fields[i].apiFull) {
-                        transformedContent[fieldName] = document.fields[fieldName];
+    var transformContent = function (content, transformType, db, callback) {
+        findContentType(content.type, db, function (contentType) {
+                var transformedContent = {
+                    id: content._id,
+                    type: contentType.uri,
+                    meta: {
+                        href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + content._id
                     }
-                }
+                };
 
-                response.send(transformedContent);
-            } else {
-                response.status(404).send('Not found');
+                array(contentType.fields).each(function (field) {
+                    var fieldName = field.name;
+                    if (field[transformType] && !(isAssociationField(field) || isListAssociationField(field))) {
+                        transformedContent[fieldName] = content.fields[fieldName];
+                    }
+                });
+
+                callback(content, contentType, transformedContent);
             }
+        )
+        ;
+    };
 
-            callback();
+    var isAssociationField = function (field) {
+        return field._class == 'trinity.field.AssociationField';
+    };
+
+    var isListAssociationField = function (field) {
+        return field._class == 'trinity.field.ListAssociationField';
+    };
+
+    var findContentType = function (id, db, callback) {
+        console.log('Finding content type [%s]', id);
+        var collection = db.collection('contentType');
+
+        collection.findOne({_id: ObjectId(id)}, function (err, contentType) {
+            assert.equal(err, null);
+
+            callback(contentType);
         });
+    };
+
+    var findAssociatedContent = function (content, contentType, transformedContent, db, callback) {
+        var contentIds = extractUniqueAssociationIds(content, contentType);
+        if (contentIds.length > 0) {
+            var transformedAssociatedContent = [];
+            contentIds.each(function (id) {
+                findContent(id, 'apiTeaser', db, function (associatedContent, type) {
+                    transformContent(associatedContent, type, db, function (associatedContent, associatedContentType, associatedTransformedContent) {
+                        console.log(associatedTransformedContent)
+                        transformedAssociatedContent.push(associatedTransformedContent);
+                        if (transformedAssociatedContent.length == contentIds.length) {
+                            populateAssociatedContent(content, transformedContent, contentType, transformedAssociatedContent, callback);
+                        }
+                    });
+                });
+            });
+        } else {
+            callback(transformedContent);
+        }
+    };
+
+    var extractUniqueAssociationIds = function (content, contentType) {
+        var contentIds = array();
+
+        array(contentType.fields).each(function (field) {
+            if (isAssociationField(field)) {
+                contentIds.push(content.fields[field.name]);
+            } else if (isListAssociationField(field)) {
+                array(content.fields[field.name]).each(function (id) {
+                    contentIds.push(id);
+                });
+            }
+        });
+
+        return contentIds.unique();
+    };
+
+    var populateAssociatedContent = function (content, transformedContent, contentType, transformedAssociatedContent, callback) {
+        var associatedContentForId = function (id) {
+            return array(transformedAssociatedContent).find(function (transformedAssociatedContent) {
+                return transformedAssociatedContent.id == id;
+            });
+        };
+
+        array(contentType.fields).each(function (field) {
+            if (isAssociationField(field)) {
+                var id = content.fields[field.name];
+                if (id) {
+                    transformedContent[field.name] = associatedContentForId(id);
+                }
+            } else if (isListAssociationField(field)) {
+                array(content.fields[field.name]).each(function (id) {
+                    if (id) {
+                        if (!transformedContent[field.name]) {
+                            transformedContent[field.name] = [];
+                        }
+
+                        transformedContent[field.name].push(associatedContentForId(id));
+                    }
+                });
+            }
+        });
+
+        callback(transformedContent);
     };
 
     MongoClient.connect(mongoUrl, function (err, db) {
         assert.equal(null, err);
 
-        findContentType(db, function (contentType) {
-            findContent(contentType, db, function () {
-                db.close();
-            });
+        findContent(request.params.contentId, 'apiFull', db, function (content, transformType) {
+            transformContent(content, transformType, db, function (content, contentType, transformedContent) {
+                findAssociatedContent(content, contentType, transformedContent, db, function (transformedContent) {
+                    response.send(transformedContent);
+                    db.close();
+                });
+            })
         });
     });
 });
