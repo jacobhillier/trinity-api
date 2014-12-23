@@ -12,7 +12,7 @@ app.set('port', (process.env.PORT || 5000));
 
 app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
     var findContent = function (id, transformType, db, callback) {
-        console.log('Finding content [%s]', id);
+        // console.log('Finding content [%s]', id);
         var collection = db.collection('content');
 
         collection.findOne({_id: ObjectId(id)}, function (err, content) {
@@ -33,13 +33,12 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
                 };
 
                 array(contentType.fields).each(function (field) {
-                    var fieldName = field.name;
                     if (field[transformType] && !(isAssociationField(field) || isListAssociationField(field))) {
-                        transformedContent[fieldName] = content.fields[fieldName];
+                        transformedContent[field.name] = content.fields[field._id];
                     }
                 });
 
-                callback(content, contentType, transformedContent);
+                callback(content, contentType, transformedContent, transformType);
             }
         )
         ;
@@ -54,7 +53,7 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
     };
 
     var findContentType = function (id, db, callback) {
-        console.log('Finding content type [%s]', id);
+        // console.log('Finding content type [%s]', id);
         var collection = db.collection('contentType');
 
         collection.findOne({_id: ObjectId(id)}, function (err, contentType) {
@@ -64,17 +63,16 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
         });
     };
 
-    var findAssociatedContent = function (content, contentType, transformedContent, db, callback) {
-        var contentIds = extractUniqueAssociationIds(content, contentType);
+    var findAssociatedContent = function (content, contentType, transformedContent, transformType, db, callback) {
+        var contentIds = extractUniqueAssociationIds(content, contentType, transformType);
         if (contentIds.length > 0) {
             var transformedAssociatedContent = [];
             contentIds.each(function (id) {
                 findContent(id, 'apiTeaser', db, function (associatedContent, type) {
                     transformContent(associatedContent, type, db, function (associatedContent, associatedContentType, associatedTransformedContent) {
-                        console.log(associatedTransformedContent)
                         transformedAssociatedContent.push(associatedTransformedContent);
                         if (transformedAssociatedContent.length == contentIds.length) {
-                            populateAssociatedContent(content, transformedContent, contentType, transformedAssociatedContent, callback);
+                            populateAssociatedContent(content, transformedContent, contentType, transformedAssociatedContent, transformType, callback);
                         }
                     });
                 });
@@ -84,23 +82,25 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
         }
     };
 
-    var extractUniqueAssociationIds = function (content, contentType) {
+    var extractUniqueAssociationIds = function (content, contentType, transformType) {
         var contentIds = array();
 
         array(contentType.fields).each(function (field) {
-            if (isAssociationField(field)) {
-                contentIds.push(content.fields[field.name]);
-            } else if (isListAssociationField(field)) {
-                array(content.fields[field.name]).each(function (id) {
-                    contentIds.push(id);
-                });
+            if (field[transformType]) {
+                if (isAssociationField(field)) {
+                    contentIds.push(content.fields[field._id]);
+                } else if (isListAssociationField(field)) {
+                    array(content.fields[field._id]).each(function (id) {
+                        contentIds.push(id);
+                    });
+                }
             }
         });
 
         return contentIds.unique();
     };
 
-    var populateAssociatedContent = function (content, transformedContent, contentType, transformedAssociatedContent, callback) {
+    var populateAssociatedContent = function (content, transformedContent, contentType, transformedAssociatedContent, transformType, callback) {
         var associatedContentForId = function (id) {
             return array(transformedAssociatedContent).find(function (transformedAssociatedContent) {
                 return transformedAssociatedContent.id == id;
@@ -108,21 +108,23 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
         };
 
         array(contentType.fields).each(function (field) {
-            if (isAssociationField(field)) {
-                var id = content.fields[field.name];
-                if (id) {
-                    transformedContent[field.name] = associatedContentForId(id);
-                }
-            } else if (isListAssociationField(field)) {
-                array(content.fields[field.name]).each(function (id) {
+            if (field[transformType]) {
+                if (isAssociationField(field)) {
+                    var id = content.fields[field._id];
                     if (id) {
-                        if (!transformedContent[field.name]) {
-                            transformedContent[field.name] = [];
-                        }
-
-                        transformedContent[field.name].push(associatedContentForId(id));
+                        transformedContent[field.name] = associatedContentForId(id);
                     }
-                });
+                } else if (isListAssociationField(field)) {
+                    array(content.fields[field._id]).each(function (id) {
+                        if (id) {
+                            if (!transformedContent[field.name]) {
+                                transformedContent[field.name] = [];
+                            }
+
+                            transformedContent[field.name].push(associatedContentForId(id));
+                        }
+                    });
+                }
             }
         });
 
@@ -133,8 +135,8 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
         assert.equal(null, err);
 
         findContent(request.params.contentId, 'apiFull', db, function (content, transformType) {
-            transformContent(content, transformType, db, function (content, contentType, transformedContent) {
-                findAssociatedContent(content, contentType, transformedContent, db, function (transformedContent) {
+            transformContent(content, transformType, db, function (content, contentType, transformedContent, transformType) {
+                findAssociatedContent(content, contentType, transformedContent, transformType, db, function (transformedContent) {
                     response.send(transformedContent);
                     db.close();
                 });
