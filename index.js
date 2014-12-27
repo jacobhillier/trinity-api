@@ -14,8 +14,24 @@ var app = express();
 app.set('port', (process.env.PORT || 5000));
 
 app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
-    var findContent = function (id, transformType, failOnNotFound, db, callback) {
-        log.debug('findContent [%s], [%s], [%s]', id, transformType, failOnNotFound);
+    var findContentType = function (criteria, failOnNotFound, db, callback) {
+        log.debug('findContentType <%j>', criteria);
+
+        var collection = db.collection('contentType');
+
+        collection.findOne(criteria, function (err, contentType) {
+            assert.equal(err, null);
+
+            if (contentType) {
+                callback(contentType, failOnNotFound);
+            } else if (failOnNotFound) {
+                sendNotFound(db);
+            }
+        });
+    };
+
+    var findContent = function (id, contentType, transformType, failOnNotFound, db, callback) {
+        log.debug('findContent <%s>, <%j>, <%s>, <%s>', id, contentType, transformType, failOnNotFound);
 
         var collection = db.collection('content');
 
@@ -23,35 +39,35 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
             assert.equal(err, null);
 
             if (content) {
-                callback(content, transformType);
+                if (content.type == contentType._id) {
+                    callback(content, contentType, transformType);
+                } else if (failOnNotFound) {
+                    sendNotFound(db);
+                }
             } else if (failOnNotFound) {
                 sendNotFound(db);
             }
         });
     };
 
-    var transformContent = function (content, transformType, db, callback) {
-        log.debug('transformContent [%j], [%s]', content, transformType);
+    var transformContent = function (content, contentType, transformType, db, callback) {
+        log.debug('transformContent <%j>, <%j>, <%s>', content, contentType, transformType);
 
-        findContentType(content.type, db, function (contentType) {
-                var transformedContent = {
-                    id: content._id,
-                    type: contentType.uri,
-                    meta: {
-                        href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + content._id
-                    }
-                };
-
-                array(contentType.fields).each(function (field) {
-                    if (field[transformType] && isTextField(field)) {
-                        transformedContent[field.name] = content.fields[field._id].value;
-                    }
-                });
-
-                callback(content, transformedContent, contentType, transformType);
+        var transformedContent = {
+            id: content._id,
+            type: contentType.uri,
+            meta: {
+                href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + content._id
             }
-        )
-        ;
+        };
+
+        array(contentType.fields).each(function (field) {
+            if (field[transformType] && isTextField(field)) {
+                transformedContent[field.name] = content.fields[field._id].value;
+            }
+        });
+
+        callback(content, transformedContent, contentType, transformType);
     };
 
     var isTextField = function (field) {
@@ -66,34 +82,24 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
         return field._class == 'trinity.field.ListAssociationField';
     };
 
-    var findContentType = function (id, db, callback) {
-        log.debug('findContentType [%s]', id);
-
-        var collection = db.collection('contentType');
-
-        collection.findOne({_id: ObjectId(id)}, function (err, contentType) {
-            assert.equal(err, null);
-
-            callback(contentType);
-        });
-    };
-
     var findAssociatedContent = function (content, transformedContent, contentType, transformType, db, callback) {
-        log.debug('findAssociatedContent [%j], [%j]', content, transformType);
+        log.debug('findAssociatedContent <%j>, <%j>', content, transformType);
 
-        var contentIds = extractUniqueAssociationIds(content, contentType, transformType);
+        var contentIds = extractUniqueAssociations(content, contentType, transformType);
         if (contentIds.length > 0) {
             var associatedTransformedContents = [];
-            contentIds.each(function (id) {
-                findContent(id, 'apiTeaser', false, db, function (associatedContent, associatedTransformType) {
-                    transformContent(associatedContent, associatedTransformType, db, function (associatedContent, associatedTransformedContent, associatedContentType) {
-                        findAssociatedContent(associatedContent, associatedTransformedContent, associatedContentType, associatedTransformType, db, function (associatedTransformedContent) {
-                            associatedTransformedContents.push(associatedTransformedContent);
-                            if (associatedTransformedContents.length == contentIds.length) {
-                                populateAssociatedContent(content, transformedContent, contentType, associatedTransformedContents, transformType);
+            contentIds.each(function (association) {
+                findContentType({_id: ObjectId(association.contentType)}, false, db, function (associatedContentType, failOnNotFound) {
+                    findContent(association._id, associatedContentType, 'apiTeaser', failOnNotFound, db, function (associatedContent, associatedContentType, associatedTransformType) {
+                        transformContent(associatedContent, associatedContentType, associatedTransformType, db, function (associatedContent, associatedTransformedContent, associatedContentType) {
+                            findAssociatedContent(associatedContent, associatedTransformedContent, associatedContentType, associatedTransformType, db, function (associatedTransformedContent) {
+                                associatedTransformedContents.push(associatedTransformedContent);
+                                if (associatedTransformedContents.length == contentIds.length) {
+                                    populateAssociatedContent(content, transformedContent, contentType, associatedTransformedContents, transformType);
 
-                                callback(transformedContent);
-                            }
+                                    callback(transformedContent);
+                                }
+                            });
                         });
                     });
                 });
@@ -103,18 +109,18 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
         }
     };
 
-    var extractUniqueAssociationIds = function (content, contentType, transformType) {
-        log.debug('extractUniqueAssociationIds [%j], [%j], [%s]', content, contentType, transformType);
+    var extractUniqueAssociations = function (content, contentType, transformType) {
+        log.debug('extractUniqueAssociationIds <%j>, <%j>, <%s>', content, contentType, transformType);
 
         var contentIds = array();
 
         array(contentType.fields).each(function (field) {
             if (field[transformType] && content.fields[field._id]) {
                 if (isAssociationField(field)) {
-                    contentIds.push(content.fields[field._id]._id);
+                    contentIds.push(content.fields[field._id]);
                 } else if (isListAssociationField(field)) {
                     array(content.fields[field._id].associations).each(function (association) {
-                        contentIds.push(association._id);
+                        contentIds.push(association);
                     });
                 }
             }
@@ -124,7 +130,7 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
     };
 
     var populateAssociatedContent = function (content, transformedContent, contentType, transformedAssociatedContent, transformType) {
-        log.debug('populateAssociatedContent [%j], [%j], [%j], [%j], [%s]', content, transformedContent, contentType, transformedAssociatedContent, transformType);
+        log.debug('populateAssociatedContent <%j>, <%j>, <%j>, <%j>, <%s>', content, transformedContent, contentType, transformedAssociatedContent, transformType);
 
         var associatedContentForId = function (id) {
             return array(transformedAssociatedContent).find(function (transformedAssociatedContent) {
@@ -163,13 +169,15 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
     MongoClient.connect(mongoUrl, function (err, db) {
         assert.equal(null, err);
 
-        findContent(request.params.contentId, 'apiFull', true, db, function (content, transformType) {
-            transformContent(content, transformType, db, function (content, transformedContent, contentType, transformType) {
-                findAssociatedContent(content, transformedContent, contentType, transformType, db, function (transformedContent) {
-                    response.send(transformedContent);
-                    db.close();
+        findContentType({uri: request.params.contentTypeUri}, true, db, function (contentType, failOnNotFound) {
+            findContent(request.params.contentId, contentType, 'apiFull', failOnNotFound, db, function (content, contentType, transformType) {
+                transformContent(content, contentType, transformType, db, function (content, transformedContent, contentType, transformType) {
+                    findAssociatedContent(content, transformedContent, contentType, transformType, db, function (transformedContent) {
+                        response.send(transformedContent);
+                        db.close();
+                    });
                 });
-            })
+            });
         });
     });
 });
