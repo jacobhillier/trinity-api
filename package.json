@@ -9,7 +9,8 @@
   "dependencies": {
     "express": "~4.9.x",
     "mongodb": "~2.0",
-    "array": "~0.4.3"
+    "array": "~0.4.3",
+    "loglevel": "~1.2.0"
   },
   "engines": {
     "node": "0.10.x"
