@@ -33,39 +33,42 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
     var findContent = function (id, contentType, transformType, failOnNotFound, db, callback) {
         log.debug('findContent <%s>, <%j>, <%s>, <%s>', id, contentType, transformType, failOnNotFound);
 
-        var collection = db.collection('content');
+        var collection = db.collection(pickContentCollection(contentType));
 
         collection.findOne({_id: ObjectId(id)}, function (err, content) {
             assert.equal(err, null);
 
-            if (content) {
-                if (content.type == contentType._id) {
-                    callback(content, contentType, transformType);
-                } else if (failOnNotFound) {
-                    sendNotFound(db);
-                }
-            } else if (failOnNotFound) {
+            if (failOnNotFound && (!content || content.type != contentType._id)) {
                 sendNotFound(db);
             }
+
+            callback(content, contentType, transformType);
         });
+    };
+
+    var pickContentCollection = function (contentType) {
+        return contentType.publishable ? 'publishedContent' : 'content';
     };
 
     var transformContent = function (content, contentType, transformType, db, callback) {
         log.debug('transformContent <%j>, <%j>, <%s>', content, contentType, transformType);
 
-        var transformedContent = {
-            id: content._id,
-            type: contentType.uri,
-            meta: {
-                href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + content._id
-            }
-        };
+        var transformedContent;
+        if (content) {
+            transformedContent = {
+                id: content._id,
+                type: contentType.uri,
+                meta: {
+                    href: request.protocol + "://" + request.headers.host + "/api/v1/" + contentType.uri + "/" + content._id
+                }
+            };
 
-        array(contentType.fields).each(function (field) {
-            if (field[transformType] && isTextField(field)) {
-                transformedContent[field.name] = content.fields[field._id].value;
-            }
-        });
+            array(contentType.fields).each(function (field) {
+                if (field[transformType] && isTextField(field)) {
+                    transformedContent[field.name] = content.fields[field._id].value;
+                }
+            });
+        }
 
         callback(content, transformedContent, contentType, transformType);
     };
@@ -87,15 +90,17 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
 
         var contentIds = extractUniqueAssociations(content, contentType, transformType);
         if (contentIds.length > 0) {
-            var associatedTransformedContents = [];
+            var callbackCount = 0;
+            var associatedTransformedContents = array();
             contentIds.each(function (association) {
                 findContentType({_id: ObjectId(association.contentType)}, false, db, function (associatedContentType, failOnNotFound) {
                     findContent(association._id, associatedContentType, 'apiTeaser', failOnNotFound, db, function (associatedContent, associatedContentType, associatedTransformType) {
                         transformContent(associatedContent, associatedContentType, associatedTransformType, db, function (associatedContent, associatedTransformedContent, associatedContentType) {
                             findAssociatedContent(associatedContent, associatedTransformedContent, associatedContentType, associatedTransformType, db, function (associatedTransformedContent) {
                                 associatedTransformedContents.push(associatedTransformedContent);
-                                if (associatedTransformedContents.length == contentIds.length) {
-                                    populateAssociatedContent(content, transformedContent, contentType, associatedTransformedContents, transformType);
+
+                                if (++callbackCount == contentIds.length) {
+                                    populateAssociatedContent(content, transformedContent, contentType, associatedTransformedContents.compact(), transformType);
 
                                     callback(transformedContent);
                                 }
@@ -114,26 +119,28 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
 
         var contentIds = array();
 
-        array(contentType.fields).each(function (field) {
-            if (field[transformType] && content.fields[field._id]) {
-                if (isAssociationField(field)) {
-                    contentIds.push(content.fields[field._id]);
-                } else if (isListAssociationField(field)) {
-                    array(content.fields[field._id].associations).each(function (association) {
-                        contentIds.push(association);
-                    });
+        if (content) {
+            array(contentType.fields).each(function (field) {
+                if (field[transformType] && content.fields[field._id]) {
+                    if (isAssociationField(field)) {
+                        contentIds.push(content.fields[field._id]);
+                    } else if (isListAssociationField(field)) {
+                        array(content.fields[field._id].associations).each(function (association) {
+                            contentIds.push(association);
+                        });
+                    }
                 }
-            }
-        });
+            });
+        }
 
         return contentIds.unique();
     };
 
-    var populateAssociatedContent = function (content, transformedContent, contentType, transformedAssociatedContent, transformType) {
-        log.debug('populateAssociatedContent <%j>, <%j>, <%j>, <%j>, <%s>', content, transformedContent, contentType, transformedAssociatedContent, transformType);
+    var populateAssociatedContent = function (content, transformedContent, contentType, associatedTransformedContents, transformType) {
+        log.debug('populateAssociatedContent <%j>, <%j>, <%j>, <%j>, <%s>', content, transformedContent, contentType, associatedTransformedContents, transformType);
 
         var associatedContentForId = function (id) {
-            return array(transformedAssociatedContent).find(function (transformedAssociatedContent) {
+            return associatedTransformedContents.find(function (transformedAssociatedContent) {
                 return id && transformedAssociatedContent.id == id.toHexString();
             });
         };
@@ -143,16 +150,24 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
                 if (isAssociationField(field)) {
                     var id = content.fields[field._id]._id;
                     if (id) {
-                        transformedContent[field.name] = associatedContentForId(id);
+                        var associatedContent = associatedContentForId(id);
+
+                        if (associatedContent) {
+                            transformedContent[field.name] = associatedContent;
+                        }
                     }
                 } else if (isListAssociationField(field)) {
                     array(content.fields[field._id].associations).each(function (association) {
                         if (association._id) {
-                            if (!transformedContent[field.name]) {
-                                transformedContent[field.name] = [];
-                            }
+                            var associatedContent = associatedContentForId(association._id);
 
-                            transformedContent[field.name].push(associatedContentForId(association._id));
+                            if (associatedContent) {
+                                if (!transformedContent[field.name]) {
+                                    transformedContent[field.name] = [];
+                                }
+
+                                transformedContent[field.name].push(associatedContent);
+                            }
                         }
                     });
                 }
