@@ -29,8 +29,8 @@ var findContentType = function (criteria, failOnNotFound, db, callback) {
     });
 };
 
-var findContent = function (id, contentType, transformType, failOnNotFound, db, callback) {
-    log.debug('findContent <%s>, <%j>, <%s>, <%s>', id, contentType, transformType, failOnNotFound);
+var findContent = function (id, contentType, failOnNotFound, db, callback) {
+    log.debug('findContent <%s>, <%j>, <%s>', id, contentType, failOnNotFound);
 
     var collection = db.collection(pickContentCollection(contentType));
 
@@ -41,7 +41,7 @@ var findContent = function (id, contentType, transformType, failOnNotFound, db, 
             sendNotFound(db);
         }
 
-        callback(content, contentType, transformType);
+        callback(content, contentType);
     });
 };
 
@@ -93,8 +93,8 @@ var findAssociatedContent = function (content, transformedContent, contentType, 
         var associatedTransformedContents = array();
         contentIds.each(function (association) {
             findContentType({_id: ObjectId(association.contentType)}, false, db, function (associatedContentType, failOnNotFound) {
-                findContent(association._id, associatedContentType, 'apiTeaser', failOnNotFound, db, function (associatedContent, associatedContentType, associatedTransformType) {
-                    transformContent(associatedContent, associatedContentType, associatedTransformType, request, db, function (associatedContent, associatedTransformedContent, associatedContentType) {
+                findContent(association._id, associatedContentType, failOnNotFound, db, function (associatedContent, associatedContentType) {
+                    transformContent(associatedContent, associatedContentType, 'apiTeaser', request, db, function (associatedContent, associatedTransformedContent, associatedContentType, associatedTransformType, request) {
                         findAssociatedContent(associatedContent, associatedTransformedContent, associatedContentType, associatedTransformType, request, db, function (associatedTransformedContent) {
                             associatedTransformedContents.push(associatedTransformedContent);
 
@@ -185,8 +185,8 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
         assert.equal(null, err);
 
         findContentType({uri: request.params.contentTypeUri}, true, db, function (contentType, failOnNotFound) {
-            findContent(request.params.contentId, contentType, 'apiFull', failOnNotFound, db, function (content, contentType, transformType) {
-                transformContent(content, contentType, transformType, request, db, function (content, transformedContent, contentType, transformType, request) {
+            findContent(request.params.contentId, contentType, failOnNotFound, db, function (content, contentType) {
+                transformContent(content, contentType, 'apiFull', request, db, function (content, transformedContent, contentType, transformType, request) {
                     findAssociatedContent(content, transformedContent, contentType, transformType, request, db, function (transformedContent) {
                         response.send(transformedContent);
                         db.close();
