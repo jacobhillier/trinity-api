@@ -15,13 +15,48 @@ app.set('port', (process.env.PORT || 5000));
 
 function Trinity(request, response, db) {
     return ({
-        findContentType: findContentType,
-        findContent: findContent,
-        findContents: findContents,
-        transformContent: transformContent,
-        findAssociatedContent: findAssociatedContent,
-        sendNotFound: sendNotFound
+        findTransformedContents: findTransformedContents,
+        findTransformedContent: findTransformedContent
     });
+
+    function findTransformedContents(contentTypeUri) {
+        findContentType({uri: contentTypeUri}, true, function (contentType) {
+            if (contentType.apiList) {
+                findContents(contentType, function (contents) {
+                    var callbackCount = 0;
+                    var transformedContents = array();
+
+                    array(contents).each(function (content) {
+                        transformContent(content, contentType, 'apiTeaser', function (content, transformedContent, contentType, transformType) {
+                            findAssociatedContent(content, transformedContent, contentType, transformType, function (transformedContent) {
+                                transformedContents.push(transformedContent);
+
+                                if (++callbackCount == contents.length) {
+                                    response.send(transformedContents.compact());
+                                    db.close();
+                                }
+                            });
+                        });
+                    });
+                });
+            } else {
+                sendNotFound();
+            }
+        });
+    }
+
+    function findTransformedContent(contentTypeUri, contentId) {
+        findContentType({uri: contentTypeUri}, true, function (contentType, failOnNotFound) {
+            findContent(contentId, contentType, failOnNotFound, function (content, contentType) {
+                transformContent(content, contentType, 'apiFull', function (content, transformedContent, contentType, transformType) {
+                    findAssociatedContent(content, transformedContent, contentType, transformType, function (transformedContent) {
+                        response.send(transformedContent);
+                        db.close();
+                    });
+                });
+            });
+        });
+    }
 
     function findContentType(criteria, failOnNotFound, callback) {
         log.debug('findContentType <%j>', criteria);
@@ -211,31 +246,7 @@ app.get('/api/v1/:contentTypeUri', function (request, response) {
     MongoClient.connect(mongoUrl, function (err, db) {
         assert.equal(null, err);
 
-        var trinity = new Trinity(request, response, db);
-
-        trinity.findContentType({uri: request.params.contentTypeUri}, true, function (contentType) {
-            if (contentType.apiList) {
-                trinity.findContents(contentType, function (contents) {
-                    var callbackCount = 0;
-                    var transformedContents = array();
-
-                    array(contents).each(function (content) {
-                        trinity.transformContent(content, contentType, 'apiTeaser', function (content, transformedContent, contentType, transformType) {
-                            trinity.findAssociatedContent(content, transformedContent, contentType, transformType, function (transformedContent) {
-                                transformedContents.push(transformedContent);
-
-                                if (++callbackCount == contents.length) {
-                                    response.send(transformedContents.compact());
-                                    db.close();
-                                }
-                            });
-                        });
-                    });
-                });
-            } else {
-                trinity.sendNotFound();
-            }
-        });
+        new Trinity(request, response, db).findTransformedContents(request.params.contentTypeUri);
     });
 });
 
@@ -243,18 +254,7 @@ app.get('/api/v1/:contentTypeUri/:contentId', function (request, response) {
     MongoClient.connect(mongoUrl, function (err, db) {
         assert.equal(null, err);
 
-        var trinity = new Trinity(request, response, db);
-
-        trinity.findContentType({uri: request.params.contentTypeUri}, true, function (contentType, failOnNotFound) {
-            trinity.findContent(request.params.contentId, contentType, failOnNotFound, function (content, contentType) {
-                trinity.transformContent(content, contentType, 'apiFull', function (content, transformedContent, contentType, transformType) {
-                    trinity.findAssociatedContent(content, transformedContent, contentType, transformType, function (transformedContent) {
-                        response.send(transformedContent);
-                        db.close();
-                    });
-                });
-            });
-        });
+        new Trinity(request, response, db).findTransformedContent(request.params.contentTypeUri, request.params.contentId);
     });
 });
 
