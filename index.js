@@ -121,7 +121,14 @@ function Trinity(request, response, db) {
 
             array(contentType.fields).each(function (field) {
                 if (field[transformType] && isTextField(field)) {
-                    transformedContent[field.name] = content.fields[field._id].value;
+                    var textFieldValue = content.fields[field._id].value;
+                    if (textFieldValue) {
+                        if (field.max && textFieldValue.length > field.max) {
+                            textFieldValue = textFieldValue.substring(0, field.max - 3) + '...'
+                        }
+
+                        transformedContent[field.name] = textFieldValue;
+                    }
                 }
             });
         }
